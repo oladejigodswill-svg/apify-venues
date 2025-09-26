@@ -1,0 +1,15 @@
+{
+  "title": "Instagram Location Stories Scraper",
+  "description": "Scrapes Instagram location tag stories for given venues and extracts profile handles + URLs.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "venues": {
+      "title": "Venues",
+      "type": "array",
+      "description": "List of venue names (e.g., 'Cloud 22 Dubai')",
+      "editor": "stringList"
+    }
+  },
+  "required": ["venues"]
+}
