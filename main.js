@@ -1,50 +1,74 @@
-import { Actor } from 'apify';
-import axios from 'axios';
-
-// Helper to simulate getting Location ID from Venue name.
-// In production, you’d refine this with an Instagram endpoint or a search API.
-async function getLocationIdFromVenue(venueName) {
-    // Example: Replace spaces with underscores
-    return venueName.replace(/\s+/g, '_').toLowerCase();
-}
-
-// Helper to fetch "stories" for a location ID.
-// ⚠️ Real scraping may need Puppeteer or Apify Proxy if Instagram blocks requests.
-async function fetchLocationStories(locationId) {
-    // Mock Instagram request (replace with actual endpoint if available)
-    const fakeResponse = {
-        stories: [
-            { username: "user1", url: `https://www.instagram.com/user1/` },
-            { username: "user2", url: `https://www.instagram.com/user2/` }
-        ]
-    };
-
-    return fakeResponse.stories;
-}
+import { Actor, Dataset, log } from 'apify';
+import { PuppeteerCrawler } from 'crawlee';
 
 await Actor.init();
 
-// Get input from schema
+// Get input from user
 const input = await Actor.getInput();
 const { venues = [] } = input;
 
 const results = [];
 
-for (const venue of venues) {
-    const locationId = await getLocationIdFromVenue(venue);
-    const stories = await fetchLocationStories(locationId);
-
-    for (const story of stories) {
-        results.push({
-            venue,
-            username: story.username,
-            profileUrl: story.url,
-            date: new Date().toISOString().split('T')[0]
-        });
-    }
+// Build Instagram location URL
+function getLocationUrl(venue) {
+    const slug = venue.trim().replace(/\s+/g, '_').toLowerCase();
+    return `https://www.instagram.com/explore/locations/${slug}/`;
 }
 
-// Save to Apify Dataset
-await Actor.pushData(results);
+// PuppeteerCrawler
+const crawler = new PuppeteerCrawler({
+    maxConcurrency: 2,
+    launchContext: {
+        useChrome: true,
+        launchOptions: {
+            headless: true, // set false if you want to debug
+        },
+    },
+    // Apify Proxy to reduce blocking
+    proxyConfiguration: await Actor.createProxyConfiguration(),
+    async requestHandler({ page, request }) {
+        const venue = request.userData.venue;
+
+        log.info(`Scraping venue: ${venue} -> ${request.url}`);
+
+        // Wait for Instagram content to load
+        await page.waitForTimeout(5000);
+
+        // Grab all profile links
+        const profileLinks = await page.$$eval('a', (links) =>
+            links
+                .map((a) => a.getAttribute('href'))
+                .filter((href) => href && href.startsWith('/') && !href.includes('/p/') && !href.includes('/stories/'))
+        );
+
+        for (const href of profileLinks) {
+            const username = href.split('/')[1];
+            if (username) {
+                results.push({
+                    venue,
+                    username,
+                    profileUrl: `https://www.instagram.com/${username}/`,
+                    date: new Date().toISOString().split('T')[0],
+                });
+            }
+        }
+    },
+    failedRequestHandler({ request }) {
+        log.error(`❌ Failed to process ${request.url}`);
+    },
+});
+
+// Add venues to crawler
+for (const venue of venues) {
+    await crawler.addRequests([{ url: getLocationUrl(venue), userData: { venue } }]);
+}
+
+// Run the crawler
+await crawler.run();
+
+// Save output
+await Dataset.pushData(results);
+
+log.info(`✅ Scraping complete. Found ${results.length} profiles.`);
 
 await Actor.exit();
